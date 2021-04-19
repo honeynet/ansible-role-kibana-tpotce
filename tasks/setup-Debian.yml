@@ -16,3 +16,31 @@
     repo: 'deb https://artifacts.elastic.co/packages/{{ kibana_version }}/apt stable main'
     state: present
     update_cache: true
+
+- name: Debian - Get installed Logstash version
+  command: dpkg-query --showformat='${Version}' --show {{ kibana_package }}
+  register: installed_kibana_version
+  failed_when: False
+  changed_when: False
+  check_mode: no
+
+- name: Debian - unhold Kibana version
+  dpkg_selections:
+    name: "{{ kibana_package }}"
+    selection: "install"
+  when: not es_version_lock or (installed_kibana_version.stdout and installed_kibana_version.stdout != es_version)
+
+- name: Debian - Ensure Kibana is installed
+  apt:
+    name: '{{ kibana_package }}{% if es_version is defined and es_version != "" %}={{ es_version }}{% endif %}'
+    state: present
+    cache_valid_time: 86400
+  notify: restart kibana
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+
+- name: Debian - hold Kibana version
+  dpkg_selections:
+    name: "{{ kibana_package }}"
+    selection: "hold"
+  when: es_version_lock
