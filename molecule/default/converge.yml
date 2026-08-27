@@ -3,21 +3,58 @@
   hosts: all
   become: true
 
+  # Empty on a normal machine; inherited by the role's apt and get_url tasks
+  # when running behind a proxy.
+  environment:
+    http_proxy: "{{ lookup('ansible.builtin.env', 'http_proxy') }}"
+    https_proxy: "{{ lookup('ansible.builtin.env', 'https_proxy') }}"
+    no_proxy: "{{ lookup('ansible.builtin.env', 'no_proxy') }}"
+
+  vars:
+    molecule_tmp: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+
+    elastic_version: "9.3.5"
+    elastic_repo_channel: "9.x"
+    elastic_version_lock: true
+
+    kibana_server_name: kibana-molecule
+    kibana_server_host: 127.0.0.1
+    kibana_server_public_base_url: https://kibana.molecule.test
+
+    # There is no cluster in this scenario. Kibana starts, validates its whole
+    # configuration and serves /api/status regardless, which is the part the
+    # role is responsible for; port 9199 is deliberately dead so the result does
+    # not depend on whether some other container happens to be listening.
+    kibana_elasticsearch_hosts:
+      - https://127.0.0.1:9199
+    kibana_elasticsearch_password: molecule-kibana-pw
+    kibana_elasticsearch_ca_file: "{{ molecule_tmp }}/elasticsearch-ca.crt"
+
+    # Any 32-character value satisfies Kibana; these are throwaway.
+    kibana_encrypted_saved_objects_key: "molecule-encrypted-saved-objects-key"
+    kibana_reporting_key: "molecule-reporting-encryption-key-32"
+    kibana_security_key: "molecule-security-encryption-key-32c"
+
+    kibana_max_old_space_size: 1024
+
   pre_tasks:
-    - name: Update apt cache.
-      apt: update_cache=true cache_valid_time=600
-      when: ansible_os_family == 'Debian'
+    # Stands in for the CA the elasticsearch role hands over, so the certificate
+    # install task and the elasticsearch.ssl.certificateAuthorities branch of
+    # the template both get exercised.
+    - name: Generate a throwaway CA certificate on the controller.
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1
+          -subj /CN=molecule-elasticsearch-ca
+          -keyout {{ molecule_tmp }}/elasticsearch-ca.key
+          -out {{ kibana_elasticsearch_ca_file }}
+        creates: "{{ kibana_elasticsearch_ca_file }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
 
   roles:
-    - role: geerlingguy.elasticsearch
-    - role: geerlingguy.kibana
-
-  post_tasks:
-    - name: Ensure Kibana is running.
-      uri:
-        url: http://127.0.0.1:5601/login
-        status_code: 200
-      register: result
-      until: result.status == 200
-      retries: 60
-      delay: 1
+    # Referenced by its own directory rather than by name, so the scenario is
+    # self-contained in the role and does not depend on where the role sits in
+    # a wider repository.
+    - role: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"

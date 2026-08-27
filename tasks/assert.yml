@@ -1,0 +1,24 @@
+---
+- name: Assert that the Kibana encryption keys have been supplied
+  ansible.builtin.assert:
+    that:
+      - kibana_encrypted_saved_objects_key | length >= 32
+      - kibana_reporting_key | length >= 32
+      - kibana_security_key | length >= 32
+    fail_msg: >-
+      kibana_encrypted_saved_objects_key, kibana_reporting_key and
+      kibana_security_key must each be at least 32 characters. Without them
+      Kibana generates random keys on every start, which invalidates encrypted
+      saved objects and drops every session. Generate three with
+      `openssl rand -hex 32` and put them in group_vars/vault.yml.
+    quiet: true
+
+- name: Assert that the kibana_system password has been supplied
+  ansible.builtin.assert:
+    that:
+      - kibana_elasticsearch_password | length >= 6
+    fail_msg: >-
+      kibana_elasticsearch_password must be set, and must match
+      elasticsearch_kibana_system_password so that the elasticsearch role and
+      Kibana agree on the kibana_system account.
+    quiet: true

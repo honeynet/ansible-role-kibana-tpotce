@@ -1,46 +1,79 @@
 ---
 - name: Ensure dependencies are installed.
-  apt:
+  ansible.builtin.apt:
     name:
       - apt-transport-https
-      - gnupg2
-    state: present
-
-- name: Add Elasticsearch apt key.
-  apt_key:
-    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
-    state: present
-
-- name: Add Kibana repository.
-  apt_repository:
-    repo: 'deb https://artifacts.elastic.co/packages/{{ kibana_version }}/apt stable main'
+      - ca-certificates
+      - gnupg
+      - python3-debian
     state: present
     update_cache: true
+    cache_valid_time: 3600
 
-- name: Debian - Get installed Logstash version
-  command: dpkg-query --showformat='${Version}' --show {{ kibana_package }}
-  register: installed_kibana_version
-  failed_when: False
-  changed_when: False
-  check_mode: no
+- name: Ensure the apt keyring directory exists.
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
 
-- name: Debian - unhold Kibana version
-  dpkg_selections:
-    name: "{{ kibana_package }}"
-    selection: "install"
-  when: not es_version_lock or (installed_kibana_version.stdout and installed_kibana_version.stdout != es_version)
+# apt_key is deprecated and the trusted.gpg keyring is ignored on Debian 13, so
+# the key is dropped into /etc/apt/keyrings and referenced by signed-by.
+- name: Add the Elastic package signing key.
+  ansible.builtin.get_url:
+    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    dest: /etc/apt/keyrings/elastic.asc
+    owner: root
+    group: root
+    mode: '0644'
 
-- name: Debian - Ensure Kibana is installed
-  apt:
-    name: '{{ kibana_package }}{% if es_version is defined and es_version != "" %}={{ es_version }}{% endif %}'
+- name: Add the Elastic apt repository for channel {{ elastic_repo_channel }}
+  ansible.builtin.deb822_repository:
+    name: elastic-{{ elastic_repo_channel }}
+    types: [deb]
+    uris: "https://artifacts.elastic.co/packages/{{ elastic_repo_channel }}/apt"
+    suites: [stable]
+    components: [main]
+    signed_by: /etc/apt/keyrings/elastic.asc
+    enabled: true
     state: present
-    cache_valid_time: 86400
-  notify: restart kibana
-  environment:
-    ES_PATH_CONF: "{{ es_conf_dir }}"
+  register: kibana_repository
 
-- name: Debian - hold Kibana version
-  dpkg_selections:
+- name: Refresh the apt cache after a repository change.
+  ansible.builtin.apt:
+    update_cache: true
+  when: kibana_repository.changed
+
+- name: Determine the currently installed Kibana version.
+  ansible.builtin.command:
+    cmd: dpkg-query --showformat=${Version} --show {{ kibana_package }}
+  register: kibana_installed_version
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Release the Kibana version hold.
+  ansible.builtin.dpkg_selections:
     name: "{{ kibana_package }}"
-    selection: "hold"
-  when: es_version_lock
+    selection: install
+  # dpkg only knows a package it has seen before, so on a first install there is
+  # no selection to release and the module would fail outright.
+  when:
+    - kibana_installed_version.rc == 0
+    - >-
+      not (elastic_version_lock | bool)
+      or kibana_installed_version.stdout != kibana_package_version
+
+- name: Install Kibana version {{ kibana_package_version }}
+  ansible.builtin.apt:
+    name: "{{ kibana_package }}={{ kibana_package_version }}"
+    state: present
+    allow_downgrade: true
+  notify: restart kibana
+
+- name: Hold the Kibana package at version {{ kibana_package_version }}
+  ansible.builtin.dpkg_selections:
+    name: "{{ kibana_package }}"
+    selection: hold
+  when: elastic_version_lock | bool
