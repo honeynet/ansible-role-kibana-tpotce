@@ -1,0 +1,63 @@
+---
+name: Upstream sync check
+'on':
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, Monday
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check geerlingguy/ansible-role-kibana for changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: kibana
+
+      - name: Check out upstream geerlingguy/ansible-role-kibana
+        uses: actions/checkout@v4
+        with:
+          repository: geerlingguy/ansible-role-kibana
+          path: upstream
+
+      # handlers/main.yml is kept byte-for-byte identical to upstream (see
+      # README.md's Provenance section), so a straight diff is enough to
+      # know whether a sync is due.
+      - name: Compare the files carried verbatim from upstream
+        id: diff
+        working-directory: kibana
+        run: |
+          changed=0
+          for f in handlers/main.yml; do
+            if ! diff -q "$f" "../upstream/$f" >/dev/null 2>&1; then
+              echo "Changed upstream: $f"
+              changed=1
+              cp "../upstream/$f" "$f"
+            fi
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update a PR with the upstream changes
+        if: steps.diff.outputs.changed == '1'
+        working-directory: kibana
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream_sha=$(git -C ../upstream rev-parse --short HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b upstream-sync
+          git add handlers/main.yml
+          git commit -m "Sync verbatim upstream files from geerlingguy/ansible-role-kibana@${upstream_sha}"
+          git push -u origin upstream-sync --force
+          if ! gh pr list --head upstream-sync --state open --json number --jq '.[0]' | grep -q .; then
+            gh pr create \
+              --title "Upstream sync: geerlingguy/ansible-role-kibana@${upstream_sha}" \
+              --body "handlers/main.yml changed upstream at geerlingguy/ansible-role-kibana@${upstream_sha}. This is meant to stay byte-for-byte identical to upstream (see README.md), so review the diff before merging in case the change needs adapting for this fork." \
+              --base master --head upstream-sync
+          fi
