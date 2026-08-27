@@ -1,18 +1,63 @@
 ---
-kibana_version: "7.x"
+# Version and packaging ------------------------------------------------------
+elastic_version: "9.3.5"
+elastic_repo_channel: "9.x"
+elastic_version_lock: true
 
 kibana_package: kibana
-kibana_package_state: present
+# The Kibana .deb carries no epoch, so the apt version is the plain stack
+# version.
+kibana_package_version: "{{ elastic_version }}"
 
 kibana_service_state: started
 kibana_service_enabled: true
 
+# Paths ----------------------------------------------------------------------
+kibana_conf_dir: /etc/kibana
+kibana_certs_dir: /etc/kibana/certs
 kibana_config_template: kibana.yml.j2
 kibana_config_file_path: /etc/kibana/kibana.yml
 
+# Server ---------------------------------------------------------------------
+kibana_server_name: "{{ inventory_hostname }}"
 kibana_server_port: 5601
-kibana_server_host: "0.0.0.0"
+kibana_server_host: "127.0.0.1"
+# Set when Kibana sits behind a reverse proxy, e.g. "https://kibana.example.org".
+kibana_server_public_base_url: ""
+kibana_server_base_path: ""
+kibana_server_rewrite_base_path: false
 
-kibana_elasticsearch_url: "http://localhost:9200"
-kibana_elasticsearch_username: ""
+# Elasticsearch --------------------------------------------------------------
+kibana_elasticsearch_hosts:
+  - https://localhost:9200
+# Kibana 8+ refuses to connect as the elastic superuser; kibana_system is the
+# built-in account for this, and the elasticsearch role sets its password.
+kibana_elasticsearch_username: kibana_system
 kibana_elasticsearch_password: ""
+# Controller-side path to the cluster CA produced by the elasticsearch role.
+kibana_elasticsearch_ca_file: ""
+kibana_elasticsearch_ssl_verification_mode: full
+kibana_elasticsearch_request_timeout: 60000
+kibana_elasticsearch_shard_timeout: 60000
+
+# Encryption keys ------------------------------------------------------------
+# Required, 32 characters or longer. Kibana generates random keys at startup if
+# these are unset, which invalidates encrypted saved objects and logs out every
+# session on each restart. Supply them from an ansible-vault encrypted file.
+kibana_encrypted_saved_objects_key: ""
+kibana_reporting_key: ""
+kibana_security_key: ""
+
+# Behaviour ------------------------------------------------------------------
+kibana_telemetry_enabled: false
+kibana_newsfeed_enabled: false
+# Carried over from T-Pot: honeypot dashboards issue wide terms aggregations.
+kibana_autocomplete_timeout: 60000
+kibana_autocomplete_terminate_after: 1000000
+
+# Node --------------------------------------------------------------------
+# Written to /etc/kibana/node.options. Empty leaves the packaged default.
+kibana_max_old_space_size: ""
+
+# Arbitrary extra kibana.yml keys, merged over everything above.
+kibana_extra_config: {}
