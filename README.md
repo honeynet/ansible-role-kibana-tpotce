@@ -66,7 +66,38 @@ now fails fast on a non-Debian `os_family`.
 
 ## Molecule
 
-The molecule scenario has been removed. It converged
-`geerlingguy.elasticsearch` + `geerlingguy.kibana`, neither of which this
-repository uses any more, and it cannot exercise a role that now requires a
-real TLS-secured cluster with credentials.
+`molecule test` converges the role on `geerlingguy/docker-debian13-ansible`
+against a throwaway CA generated on the controller (standing in for the
+certificate the `elasticsearch` role would otherwise hand over), and verifies
+that Kibana starts clean, serves `/api/status`, and that none of the settings
+removed in 9.x reappear in the rendered config. It replaces the old scenario,
+which converged `geerlingguy.elasticsearch` + `geerlingguy.kibana` and could
+not exercise a role that now requires real TLS credentials.
+
+## Example Playbook
+
+    - hosts: kibana
+      roles:
+        - role: honeynet.kibana
+      vars:
+        elastic_version: "9.3.5"
+        elastic_repo_channel: "9.x"
+        kibana_elasticsearch_hosts:
+          - https://elasticsearch-01.example.org:9200
+        kibana_elasticsearch_password: "{{ vault_kibana_system_password }}"
+        kibana_elasticsearch_ca_file: /etc/kibana/certs/ca.crt
+        kibana_encrypted_saved_objects_key: "{{ vault_kibana_encrypted_saved_objects_key }}"
+        kibana_reporting_key: "{{ vault_kibana_reporting_key }}"
+        kibana_security_key: "{{ vault_kibana_security_key }}"
+
+See `defaults/main.yml` for the full set of variables, and
+`molecule/default/converge.yml` for a complete working configuration.
+
+## License
+
+MIT
+
+## Author Information
+
+The Honeynet Project. Role scaffolding originally by
+[Jeff Geerling](https://github.com/geerlingguy).
