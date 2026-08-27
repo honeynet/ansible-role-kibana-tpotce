@@ -7,6 +7,7 @@ skip_list:
   # so that one variable pins the whole stack. They cannot carry a role
   # prefix.
   - var-naming[no-role-prefix]
-  # handlers/main.yml is carried verbatim from the geerlingguy/ansible-role-kibana
-  # upstream so that future syncs stay a clean diff.
+  # handlers/main.yml keeps upstream's lowercase task-name style even though
+  # the module call itself has been modernized (ansible.builtin.systemd
+  # instead of the free-form service:). See README.md's Provenance section.
   - name[casing]
