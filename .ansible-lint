@@ -1,3 +1,12 @@
+---
+profile: basic
+
 skip_list:
-  - 'yaml'
-  - 'role-name'
+  # elastic_version, elastic_repo_channel and elastic_version_lock are shared
+  # deliberately with the honeynet.elasticsearch and honeynet.logstash roles
+  # so that one variable pins the whole stack. They cannot carry a role
+  # prefix.
+  - var-naming[no-role-prefix]
+  # handlers/main.yml is carried verbatim from the geerlingguy/ansible-role-kibana
+  # upstream so that future syncs stay a clean diff.
+  - name[casing]
