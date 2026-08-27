@@ -6,8 +6,14 @@ Kibana 9.x, pointed at an authenticated, TLS-protected Elasticsearch cluster.
 
 | Part | Upstream | Synced at |
 | --- | --- | --- |
-| Role scaffolding (`handlers/`) | [geerlingguy/ansible-role-kibana](https://github.com/geerlingguy/ansible-role-kibana) | `41ea27d2` |
+| `handlers/main.yml` (adapted) | [geerlingguy/ansible-role-kibana](https://github.com/geerlingguy/ansible-role-kibana) | `41ea27d2` |
 | `kibana.yml` settings | [telekom-security/tpotce](https://github.com/telekom-security/tpotce), `docker/elk/kibana/Dockerfile` | `8a228130` |
+
+`handlers/main.yml` is not verbatim — it uses `ansible.builtin.systemd` with
+`daemon_reload: true` in place of upstream's free-form `service:` module, even
+at the commit cited above. `.github/workflows/upstream-sync.yml` diffs it
+against upstream on a schedule and flags (never applies) any change for
+review.
 
 ## Changes required for 9.x
 
