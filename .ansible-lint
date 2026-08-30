@@ -1,3 +1,13 @@
+---
+profile: basic
+
 skip_list:
-  - 'yaml'
-  - 'role-name'
+  # elastic_version, elastic_repo_channel and elastic_version_lock are shared
+  # deliberately with the honeynet.elasticsearch and honeynet.logstash roles
+  # so that one variable pins the whole stack. They cannot carry a role
+  # prefix.
+  - var-naming[no-role-prefix]
+  # handlers/main.yml keeps upstream's lowercase task-name style even though
+  # the module call itself has been modernized (ansible.builtin.systemd
+  # instead of the free-form service:). See README.md's Provenance section.
+  - name[casing]

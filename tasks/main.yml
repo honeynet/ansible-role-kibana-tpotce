@@ -1,26 +1,60 @@
 ---
-- include_tasks: setup-RedHat.yml
-  when: ansible_facts.os_family == 'RedHat'
+- name: Validate the supplied role variables
+  ansible.builtin.include_tasks: assert.yml
 
-- include_tasks: setup-Debian.yml
+- name: Install Kibana
+  ansible.builtin.include_tasks: setup-Debian.yml
   when: ansible_facts.os_family == 'Debian'
 
-- name: Install Kibana.
-  package:
-    name: "{{ kibana_package }}"
-    state: "{{ kibana_package_state }}"
+- name: Fail on unsupported platforms
+  ansible.builtin.fail:
+    msg: >-
+      This role only supports Debian-family hosts, but
+      {{ inventory_hostname }} reports os_family
+      "{{ ansible_facts.os_family }}".
+  when: ansible_facts.os_family != 'Debian'
 
-- name: Ensure Kibana is started and enabled at boot.
-  service:
-    name: kibana
-    state: "{{ kibana_service_state }}"
-    enabled: "{{ kibana_service_enabled }}"
+- name: Ensure the Kibana certificate directory exists.
+  ansible.builtin.file:
+    path: "{{ kibana_certs_dir }}"
+    state: directory
+    owner: root
+    group: kibana
+    mode: '0750'
+
+- name: Install the Elasticsearch CA certificate.
+  ansible.builtin.copy:
+    src: "{{ kibana_elasticsearch_ca_file }}"
+    dest: "{{ kibana_certs_dir }}/elasticsearch-ca.crt"
+    owner: root
+    group: kibana
+    mode: '0640'
+  when: kibana_elasticsearch_ca_file | length > 0
+  notify: restart kibana
 
 - name: Copy Kibana configuration.
-  template:
+  ansible.builtin.template:
     src: "{{ kibana_config_template }}"
     dest: "{{ kibana_config_file_path }}"
     owner: root
-    group: root
-    mode: 0644
+    group: kibana
+    mode: '0640'
   notify: restart kibana
+
+- name: Set the Kibana Node heap limit.
+  ansible.builtin.lineinfile:
+    path: "{{ kibana_conf_dir }}/node.options"
+    regexp: '^--max-old-space-size='
+    line: "--max-old-space-size={{ kibana_max_old_space_size }}"
+    owner: root
+    group: kibana
+    mode: '0640'
+    create: true
+  when: kibana_max_old_space_size | string | length > 0
+  notify: restart kibana
+
+- name: Ensure Kibana is started and enabled at boot.
+  ansible.builtin.service:
+    name: kibana
+    state: "{{ kibana_service_state }}"
+    enabled: "{{ kibana_service_enabled }}"

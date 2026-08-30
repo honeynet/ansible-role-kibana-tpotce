@@ -1,0 +1,194 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    kibana_conf_dir: /etc/kibana
+    kibana_certs_dir: /etc/kibana/certs
+    kibana_url: http://127.0.0.1:5601
+
+    # Every setting Kibana 9 removed that earlier revisions of this role's
+    # template still wrote. Kibana refuses to start on an unrecognised key, so
+    # any of these coming back would be a hard startup failure in production.
+    kibana_removed_settings:
+      - xpack.infra.enabled
+      - xpack.canvas.enabled
+      - xpack.spaces.enabled
+      - xpack.apm.enabled
+      - xpack.uptime.enabled
+      - xpack.ml.enabled
+      - xpack.securitySolution.enabled
+      - xpack.logstash.enabled
+      - xpack.security.enabled
+
+  tasks:
+
+    # Packaging ------------------------------------------------------------
+
+    - name: Read the installed Kibana version.
+      ansible.builtin.command:
+        cmd: dpkg-query --showformat=${Version} --show kibana
+      register: kb_version
+      changed_when: false
+
+    - name: The pinned version is installed.
+      ansible.builtin.assert:
+        that:
+          - kb_version.stdout == '9.3.5'
+        fail_msg: "expected 9.3.5, got {{ kb_version.stdout }}"
+
+    - name: Read the dpkg selection state.
+      ansible.builtin.command:
+        cmd: dpkg --get-selections kibana
+      register: kb_selection
+      changed_when: false
+
+    - name: The package is held at the pinned version.
+      ansible.builtin.assert:
+        that:
+          - "'hold' in kb_selection.stdout"
+
+    # Configuration --------------------------------------------------------
+
+    - name: Read the rendered kibana.yml.
+      ansible.builtin.slurp:
+        src: "{{ kibana_conf_dir }}/kibana.yml"
+      register: kb_config_raw
+
+    - name: Parse kibana.yml.
+      ansible.builtin.set_fact:
+        kb_config: "{{ kb_config_raw.content | b64decode | from_yaml }}"
+
+    - name: None of the settings Kibana 9 removed are written.
+      ansible.builtin.assert:
+        that:
+          - kibana_removed_settings | select('in', kb_config) | list | length == 0
+        fail_msg: >-
+          kibana.yml still sets settings removed in 9.x:
+          {{ kibana_removed_settings | select('in', kb_config) | list }}
+
+    - name: The server identity came from the scenario variables.
+      ansible.builtin.assert:
+        that:
+          - kb_config['server.name'] == 'kibana-molecule'
+          - kb_config['server.host'] == '127.0.0.1'
+          - kb_config['server.port'] == 5601
+          - kb_config['server.publicBaseUrl'] == 'https://kibana.molecule.test'
+        fail_msg: "{{ kb_config | to_json }}"
+
+    # Kibana 8 onwards refuses to connect as the elastic superuser, so this has
+    # to be the built-in kibana_system account the elasticsearch role sets up.
+    - name: Kibana connects as kibana_system over TLS against the cluster CA.
+      ansible.builtin.assert:
+        that:
+          - kb_config['elasticsearch.username'] == 'kibana_system'
+          - kb_config['elasticsearch.hosts'] == ['https://127.0.0.1:9199']
+          - kb_config['elasticsearch.ssl.verificationMode'] == 'full'
+          - kb_config['elasticsearch.ssl.certificateAuthorities'] == [kibana_certs_dir ~ '/elasticsearch-ca.crt']
+        fail_msg: "{{ kb_config | to_json }}"
+
+    # Unset keys make Kibana generate random ones at every start, which
+    # invalidates encrypted saved objects and drops every session.
+    - name: The encryption keys are pinned rather than generated per start.
+      ansible.builtin.assert:
+        that:
+          - kb_config['xpack.encryptedSavedObjects.encryptionKey'] | length >= 32
+          - kb_config['xpack.reporting.encryptionKey'] | length >= 32
+          - kb_config['xpack.security.encryptionKey'] | length >= 32
+
+    - name: Telemetry and the newsfeed are off.
+      ansible.builtin.assert:
+        that:
+          - not kb_config['telemetry.enabled']
+          - not kb_config['telemetry.optIn']
+          - not kb_config['newsfeed.enabled']
+
+    - name: Stat the installed CA certificate.
+      ansible.builtin.stat:
+        path: "{{ kibana_certs_dir }}/elasticsearch-ca.crt"
+      register: kb_ca
+
+    - name: The Elasticsearch CA is installed and readable by the service.
+      ansible.builtin.assert:
+        that:
+          - kb_ca.stat.exists
+          - kb_ca.stat.gr_name == 'kibana'
+          - kb_ca.stat.mode == '0640'
+        fail_msg: "{{ kb_ca.stat | to_json }}"
+
+    - name: Read node.options.
+      ansible.builtin.slurp:
+        src: "{{ kibana_conf_dir }}/node.options"
+      register: kb_node_options
+
+    - name: The Node heap limit was applied.
+      ansible.builtin.assert:
+        that:
+          - "'--max-old-space-size=1024' in (kb_node_options.content | b64decode).splitlines()"
+        fail_msg: "{{ kb_node_options.content | b64decode }}"
+
+    # Runtime --------------------------------------------------------------
+
+    # This is the assertion that matters most. Kibana validates its entire
+    # configuration at startup and exits fatally on an unknown or malformed
+    # key, so a template that writes a setting this version dropped never gets
+    # as far as binding a port. Reaching the HTTP layer at all is therefore the
+    # signal; the body is not, because with no cluster to talk to Kibana stays
+    # in preboot and answers 503 "Kibana server is not ready yet" rather than
+    # the full status document.
+    - name: Wait for Kibana to accept its configuration and bind its port.
+      ansible.builtin.uri:
+        url: "{{ kibana_url }}/api/status"
+        status_code: [200, 503]
+      register: kb_status
+      retries: 30
+      delay: 10
+      until: kb_status.status in [200, 503]
+
+    - name: Read the Kibana journal.
+      ansible.builtin.command:
+        cmd: journalctl --unit kibana --no-pager --output cat
+      register: kb_journal
+      changed_when: false
+
+    # An unrecognised or malformed setting is reported as
+    # "FATAL Error: Unknown configuration key(s): ..." immediately before Kibana
+    # exits, so this is what catches a template written against an older
+    # version. Failing to reach Elasticsearch is expected here and is logged at
+    # error level without the word FATAL.
+    - name: Kibana raised no fatal configuration error.
+      ansible.builtin.assert:
+        that:
+          - "'FATAL' not in kb_journal.stdout"
+          - "'Unknown configuration key' not in kb_journal.stdout"
+        fail_msg: |-
+          Kibana rejected its configuration:
+          {{ kb_journal.stdout_lines | select('search', 'FATAL|Unknown configuration key') | list | join('\n') }}
+        success_msg: Kibana 9 accepted every setting the role writes.
+
+    # A configuration Kibana rejected would leave systemd restart-looping, so
+    # this catches a fatal error that happened to land between the poll above
+    # and now.
+    # A name with no state is a query: the module reports the unit's properties
+    # without touching it.
+    - name: Read the Kibana unit properties.
+      ansible.builtin.systemd:
+        name: kibana
+      register: kb_unit
+
+    - name: Kibana is not restart-looping on a rejected configuration.
+      ansible.builtin.assert:
+        that:
+          - kb_unit.status.NRestarts | int == 0
+        fail_msg: "kibana has restarted {{ kb_unit.status.NRestarts }} times"
+
+    - name: Read the service state.
+      ansible.builtin.service_facts:
+
+    - name: Kibana is enabled and running.
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['kibana.service'].state == 'running'
+          - ansible_facts.services['kibana.service'].status == 'enabled'
